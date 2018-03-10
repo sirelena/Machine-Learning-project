@@ -1,0 +1,208 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Elena Bonilla"
+date: "4 de marzo de 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+##Data analysis
+
+### Loading the data
+
+We load the data from the given sources:
+* The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+* The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r echo=TRUE, cache=TRUE}
+
+#Set csv name
+fileTraining <<- "pml-training.csv"
+fileTesting <<- "pml-testing.csv"
+
+#Adquire training file
+trainingData <<- read.csv(fileTraining)
+
+#Adquire testing file
+testingData <<- read.csv(fileTesting)
+
+```
+
+### Data summary
+
+HAR Dataset for benchmarking: "We propose a dataset with 5 classes (sitting-down, standing-up, standing, walking, and sitting) collected on 8 hours of activities of 4 healthy subjects. We also established a baseline performance index. Read more: http://groupware.les.inf.puc-rio.br/har#dataset#ixzz58p1Ywy1p"
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+Data collects information from 4 sensors (belt, arm, dumbbell, forearm), each sensor has 3 detectors (acceleration, gyroscope and magnetometer) and each detector has 3 axis (x, y, z), that makes a total of 36 variables. Other sensors variables are derivated from these variables.
+
+These are the variables with the information from the sensors:
+```{r echo=TRUE, cache=TRUE}
+
+colnames(trainingData[,grep("_x$|_y$|_z$", colnames(trainingData))])
+
+```
+
+## Model creation
+
+### Model Proposal
+
+We consider the following:
+
+* The sensor information is basic to prediction.
+* Take into account the user_name as predictor to improve accuracy.
+* When the repetition starts "new\_window" and which repetition is "num\_window" is also relevant.
+
+The model used is a Random Forest that is a combination of LDA and GBM.
+
+#### Cross validation 
+
+* Dataset contains 39 preditors and classes.
+* Training Data is separated into three sets: 60% training set, 20% testing set and 20% validating set.
+* Validation set is used to confirm the results obtained with testing set.
+
+### Creation of tests
+
+```{r modelSensorsUserWindowDataSet, message=FALSE}
+
+require(caret)
+require(kernlab)
+require(pROC)
+
+#Seed to be used to obtain the same results
+set.seed(1525)
+
+Dataset2 <- trainingData[,grep("_x$|_y$|_z$|classe|user|window", colnames(trainingData))]
+
+inBuild2 <- createDataPartition(y=Dataset2$classe, p=0.8, list=FALSE)
+validation2 <- Dataset2[-inBuild2,]
+
+buildData2 <- Dataset2[inBuild2,]
+
+inTrain2 <- createDataPartition(y=buildData2$classe, p=0.75, list=FALSE)
+trainingSet2 <- buildData2[inTrain2,]
+testingSet2 <- buildData2[-inTrain2,]
+
+```
+
+
+#### LDA Model 
+ 
+We train with the Linear discriminant analysis model.
+
+```{r modelLDASensorsUserWindow, message=FALSE}
+require(MASS)
+modelLDA2 <- train(classe ~ ., data = trainingSet2, method="lda")
+
+#Predict over testing set
+predictedLDA2 <- predict(modelLDA2, testingSet2)
+cmLDA2t <- confusionMatrix(predictedLDA2, testingSet2$classe)
+
+#Predict over validating set
+predictedLDA2v <- predict(modelLDA2, validation2)
+cmLDA2v <- confusionMatrix(predictedLDA2v, validation2$classe)
+```
+
+
+#### Model GBM: 
+We train with the Gradient Boosting Machine model:
+
+```{r message=FALSE, results="hide"}
+require(gbm)
+modelGBM2 <- train(classe ~ ., data = trainingSet2, method="gbm")
+
+#Predict over testing set
+predictedGBM2 <- predict(modelGBM2, testingSet2)
+cmGBM2t <- confusionMatrix(predictedGBM2, testingSet2$classe)
+
+#Predict over validating set
+predictedGBM2v <- predict(modelGBM2, validation2)
+cmGBM2v <- confusionMatrix(predictedGBM2v, validation2$classe)
+```
+
+
+#### RF model: 
+
+We train with the Random Forest model.Parameters: do.trace=10, ntree = 100
+
+```{r  message=FALSE, results="hide"}
+require(randomForest)
+modelRF2 <- train(classe ~ ., data = trainingSet2, method="rf", do.trace=10, ntree=100)
+
+
+#Predict over testing set
+predictedRF2 <- predict(modelRF2, testingSet2)
+cmRF2t <- confusionMatrix(predictedRF2, testingSet2$classe)
+
+#Predict over validating set
+predictedRF2v <- predict(modelRF2, validation2)
+cmRF2v <- confusionMatrix(predictedRF2v, validation2$classe)
+```
+
+#### Combined model: 
+
+We train aRandom forest from other model's predictions.Parameters: do.trace=10, ntree = 100
+
+
+```{r message=FALSE, results="hide"}
+predCompDF2 <- data.frame(predictedLDA2, predictedGBM2, predictedRF2, classe=testingSet2$classe)
+combMod2 <- train(classe ~ ., data = predCompDF2, method="rf", do.trace=10, ntree=100)
+
+
+#Predict over testing set
+combPred2 <- predict(combMod2, testingSet2)
+cmComb2t <- confusionMatrix(combPred2, testingSet2$classe)
+
+#Predict over validating set
+validationDataComb <- data.frame(predictedLDA2v, predictedGBM2v, predictedRF2v, y=validation2$classe)
+colnames(validationDataComb) <- colnames(predCompDF2)
+combPred2v <- predict(combMod2, validationDataComb)
+cmComb2v <- confusionMatrix(combPred2v, validationDataComb$classe)
+```
+
+
+
+The confusion matrix of the final model is the following:
+
+```{r finalModel, echo=FALSE} 
+combMod2$finalModel
+```
+
+
+
+The out of sample error in the testing and validating sets:
+
+Set        | Out of sample error                                | Out of sample error 95% confidence interval
+---------- | -------------------------------------------------- | --------------------------------------------
+Testing    | `r round((1-cmComb2t$overall["Accuracy"])*100,2)`% | `r round((1-cmComb2t$overall[c("AccuracyLower", "AccuracyUpper")])*100,2)`% 
+Validating | `r round((1-cmComb2v$overall["Accuracy"])*100,2)`% | `r round((1-cmComb2v$overall[c("AccuracyLower", "AccuracyUpper")])*100,2)`%
+
+
+## Prediction 
+
+The prediction of classe is:
+
+```{r predictions, message=FALSE}
+#Prediction of testingData Set to upload as result
+tpredictedLDA2 <- predict(modelLDA2, testingData)
+tpredictedGBM2 <- predict(modelGBM2, testingData)
+tpredictedRF2 <- predict(modelRF2, testingData)
+
+newdataset2 <- data.frame(tpredictedLDA2, tpredictedGBM2, tpredictedRF2)
+colnames(newdataset2) <- colnames(predCompDF2[,1:3])
+
+tpredictedComb2 <- predict(combMod2, newdata = newdataset2)
+```
+
+The prediction results for combined model is `r tpredictedComb2`
+
